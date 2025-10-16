@@ -1,29 +1,55 @@
 ##### ----- Raw Point Cloud data Processing ----- #####
 #### Author: Leah E. Staub
 #### Creation Date: 07/06/2025
-#### Update Date: 08/09/2025
+#### Update Date: 10/16/2025
 #### Purpose: This script takes raw lidar point cloud data that is clipped to study area extents and ensures it is in the proper projection. 
 
 library(pacman)
-p_load(mapview, sf, ggplot2, mapview, lidR, terra, tidyterra, fS)
+p_load(lidR)
+
+#Need to fix HARF2020 projection before loading this list
+
 
 # Named list of LAScatalogs
 las_catalogs <- list(
-  Harf2013 = readLAScatalog("F:/MASTERS/THESIS/data/Clip/LAZ34/clipped_chunk_1.laz"),
-  Harf2020 = readLAScatalog("F:/MASTERS/THESIS/data/Clip/Harford_2020_BLK1/clipped_chunk_1.laz"),
-  #Harf2020 = readLAScatalog("F:/MASTERS/THESIS/data/Clip/Harf2020_reprojected/HARF2020_ft.laz"),
-  Balt2015a = readLAScatalog("F:/MASTERS/THESIS/data/Clip/LAZ30/clipped_chunk_1.laz"),
-  Balt2015b = readLAScatalog("F:/MASTERS/THESIS/data/Clip/LAZ31/clipped_chunk_2.laz"),
-  How2011a = readLAScatalog("F:/MASTERS/THESIS/data/Clip/LAZ26/clipped_chunk_2.laz"),
-  How2011b = readLAScatalog("F:/MASTERS/THESIS/data/Clip/LAZ26/clipped_chunk_3.laz"),
-  How2018a  = readLAScatalog("F:/MASTERS/THESIS/data/Clip/How_2018_BLK_1/clipped_chunk_3.laz"),
-  How2018b  = readLAScatalog("F:/MASTERS/THESIS/data/Clip/How_2018_BLK_2/clipped_chunk_2.laz"),
-  Mont2020a = readLAScatalog("F:/MASTERS/THESIS/data/Clip/Montgomery_2020_BLK2/clipped_chunk_4.laz"),
-  Mont2020b = readLAScatalog("F:/MASTERS/THESIS/data/Clip/Montgomery_2020_BLK3/clipped_chunk_4.laz"),
-  Mont2018a = readLAScatalog("F:/MASTERS/THESIS/data/Clip/Mont_2018_BLK2/clipped_chunk_4.laz"),
-  Mont2018b = readLAScatalog("F:/MASTERS/THESIS/data/Clip/Mont_2018_BLK4/clipped_chunk_4.laz"),
-  Mont2013a = readLAScatalog("F:/MASTERS/THESIS/data/Clip/LAZ12/clipped_chunk_3.laz"),
-  Mont2013b = readLAScatalog("F:/MASTERS/THESIS/data/Clip/LAZ12/clipped_chunk_4.laz")
+  Harf2013 = readLAScatalog("F:/LEAH/Clipped_Lidar/Harford2013.laz"),
+  Harf2020 = readLAScatalog("F:/LEAH/Clipped_Lidar/Harford2020.laz"),
+  Balt2015a = readLAScatalog("F:/LEAH/Clipped_Lidar/Baltimore2015a.laz"),
+  Balt2015b = readLAScatalog("F:/LEAH/Clipped_Lidar/Baltimore2015b.laz"),
+  How2011a = readLAScatalog("F:/LEAH/Clipped_Lidar/Howard2011a.laz"),
+  How2011b = readLAScatalog("F:/LEAH/Clipped_Lidar/Howard2011b.laz"),
+  How2018a  = readLAScatalog("F:/LEAH/Clipped_Lidar/Howard2018a.laz"),
+  How2018b  = readLAScatalog("F:/LEAH/Clipped_Lidar/Howard2018b.laz"),
+  Mont2020a = readLAScatalog("F:/LEAH/Clipped_Lidar/Montgomery2020a.laz"),
+  Mont2020b = readLAScatalog("F:/LEAH/Clipped_Lidar/Montgomery2020b.laz"),
+  Mont2018a = readLAScatalog("F:/LEAH/Clipped_Lidar/Montgomery2018a.laz"),
+  Mont2018b = readLAScatalog("F:/LEAH/Clipped_Lidar/Montgomery2018b.laz"),
+  Mont2013a = readLAScatalog("F:/LEAH/Clipped_Lidar/Montgomery2013a.laz"),
+  Mont2013b = readLAScatalog("F:/LEAH/Clipped_Lidar/Montgomery2013b.laz")
 )
 
+
+#Test with just one file
+file<- "Montgomery2020a"
+
+# Path to your LAZ file
+Mont2020a = readLAS("F:/LEAH/Clipped_Lidar/Montgomery2020a.laz")
+#Took approx. 3 min to load
+
+# Path to your LAZ file
+Mont2018b = readLAS("F:/LEAH/Clipped_Lidar/Montgomery2018b.laz")
+
+
+# Create new attribute column in data itself
+test<- add_attribute(Mont2020a, file, "Source")
+
+#Update header
+test<- add_lasattribute(Mont2020a, file, "Source", "County and Year")
+print(header(las)) 
+
+
+# Write back out with extra byte fields (LAZ 1.4 supports this)
+writeLAS(test, "F:/LEAH/Data/test.laz")
+
+test2 = readLAS("F:/LEAH/Data/test.laz")
 
