@@ -9,7 +9,6 @@ p_load(lidR)
 
 #Need to fix HARF2020 projection before loading this list
 
-
 # Named list of LAScatalogs
 las_catalogs <- list(
   Harf2013 = readLAScatalog("F:/LEAH/Clipped_Lidar/Harford2013.laz"),
@@ -26,6 +25,11 @@ las_catalogs <- list(
   Mont2018b = readLAScatalog("F:/LEAH/Clipped_Lidar/Montgomery2018b.laz"),
   Mont2013a = readLAScatalog("F:/LEAH/Clipped_Lidar/Montgomery2013a.laz"),
   Mont2013b = readLAScatalog("F:/LEAH/Clipped_Lidar/Montgomery2013b.laz")
+)
+
+#Load counties for 1 study site
+las_catalogs <- list(
+  
 )
 
 

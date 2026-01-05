@@ -1,4 +1,4 @@
-##### ----- SENECA CREEK CHM Creation----- #####
+##### ----- SENECA CREEK grid resample----- #####
 #### Author: Leah E. Staub
 #### Creation Date: 04/25/2023
 #### Update Date: 11/11/2024
