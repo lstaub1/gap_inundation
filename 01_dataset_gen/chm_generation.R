@@ -8,7 +8,7 @@ library(pacman)
 p_load(lidR, terra, ggplot2)
 
 
-## PATUXENT ----
+## PATUXENT 2013----
 # 1) Read the point cloud and DTM
 las <- readLAS("F:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Montgomery2013a.laz")   # or .las
 dtm <- rast("F:/MASTERS/THESIS/2026_fresh/DTM/PatuxentTerrain.tif")             
@@ -49,41 +49,125 @@ plot(las_n, color = "Z")
 # (Optional) Remove obvious outliers and below-ground points
 las_n <- filter_poi(las_n, Z >= 0 & Z <= 200)  # adjust max height for your forest
 
+#Visually check for outliers
 plot(las_n, color = "Z")
+
+#double check tallest points
+#We know that x and y are in ft, let's make sure z is in ft too.
+#If 99.9th percentile ≈ 35, your Z is in meters.
+#If 99.9th percentile ≈ 125, your Z is in feet.
+quantile(las_n$Z, c(0.95, 0.99, 0.999), na.rm = TRUE)
 
 # 3) Build the CHM (choose resolution and algorithm)
 # Build CHM that matches DTM's grid by using DTM as the template
+#Max_edge has to do with interpolation over areas with no points (gaps). To keep interpolation low, since we are looking for gaps, I've set this to 0.
 chm   <- rasterize_canopy(
   las_n,
   res = dtm,  # <-- use the DTM raster as a template
-  algorithm = pitfree(thresholds = c(0,2,5,10,15), max_edge = c(0,30))
-)
-
-#evaluate settings
-plot(chm)                 # raster view
-plot(las_n, color = "Z")  # point cloud colored by height
-
-
-# Option B: point-to-raster with a height threshold (fast/simple)
-chm_p2r <- rasterize_canopy(
-  las_n,
-  res = 1,
-  algorithm = p2r(threshold = 0.2)  # ignore very low returns
+  algorithm = pitfree(thresholds = c(0, 6, 16, 33, 49, 82, 115), max_edge = c(0, 10, 15, 20, 25, 30, 30))
 )
 
 # 4) Post-process (fill tiny holes, light smoothing)
-chm_pf <- terra::focal(chm_pf, w = matrix(1, 3, 3), fun = max, na.policy = "omit")
-chm_pf <- terra::subst(chm_pf, NA, 0) # set NAs to 0 if desired
+chm <- terra::focal(chm, w = matrix(1, 3, 3), fun = max, na.policy = "omit")
+chm <- terra::subst(chm, NA, 0) # set NAs to 0 if desired
+
+#evaluate settings
+plot(chm)                 # raster view
+plot(las, color = "Z")  # point cloud colored by height
 
 # 5) Save
-writeRaster(chm_pf, "outputs/CHM_1m_pitfree.tif", overwrite = TRUE)
-writeRaster(chm_p2r, "outputs/CHM_1m_p2r.tif", overwrite = TRUE)
+writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm.tif", overwrite = TRUE)
 
 
 
 
 
-## NO DTM???? generate one!
+
+
+## PATUXENT 2018----
+# 1) Read the point cloud and DTM
+las <- readLAS("F:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Howard2018a.laz")   # or .las
+dtm <- rast("F:/MASTERS/THESIS/2026_fresh/DTM/PatuxentTerrain.tif")             
+
+plot(dtm)
+
+# (Optional) Classify ground if points aren’t already labeled
+las <- classify_ground(las, csf())  # Cloth Simulation Filter
+
+# Build a DTM (choose an algorithm; TIN is good when ground is well classified)
+dtm <- grid_terrain(las, res = 1, algorithm = tin())
+
+# Ensure CRS matches
+crs(dtm)
+#Looks like the crs of the dtm is Maryland State Plane (SPCS) on NAD83(NSRS2007) in US survey feet, a Lambert Conformal Conic (2SP) projection. The matching EPSG is EPSG:3582 (“NAD83 (NSRS2007) / Maryland (ftUS)”). The DTM is in WTK format, which las does not accept.
+crs(las)
+#Looks like the crs of the las file is Maryland State Plane (SPCS) on NAD83(NSRS2007) using Lambert Conformal Conic (2SP) and US survey feet for the axes. Same as the DTM!
+
+# Tell lidR the projection using EPSG (preferred for LAS headers)
+projection(las) <- "EPSG:3582"
+
+# 2) Normalize heights above ground using the DTM
+# This subtracts ground elevation from each point’s Z
+las_n <- normalize_height(las, dtm)
+
+#Check out height distribution of normalized data
+summary(las_n@data$Z)
+# Sample up to N points for plotting
+set.seed(42)
+N <- 5e6
+z <- las_n$Z
+z <- z[!is.na(z)]
+z_sample <- if (length(z) > N) sample(z, N) else z
+
+# Kernel Density plot
+ggplot(data.frame(Z = z_sample), aes(Z)) +
+  geom_density(fill = "orange", alpha = 0.3) +
+  labs(title = "Density of heights", x = "Height above ground (m)", y = "Density") +
+  theme_minimal()
+
+#Looks like the majority of sampled points fall within 125. 
+
+#Visualize normalized point cloud.
+plot(las_n, color = "Z")
+
+# (Optional) Remove obvious outliers and below-ground points
+las_n <- filter_poi(las_n, Z >= 0 & Z <= 200)  # adjust max height for your forest
+
+#Visually check for outliers
+plot(las_n, color = "Z")
+
+#double check tallest points
+#We know that x and y are in ft, let's make sure z is in ft too.
+#If 99.9th percentile ≈ 35, your Z is in meters.
+#If 99.9th percentile ≈ 125, your Z is in feet.
+quantile(las_n$Z, c(0.95, 0.99, 0.999), na.rm = TRUE)
+
+# 3) Build the CHM (choose resolution and algorithm)
+# Build CHM that matches DTM's grid by using DTM as the template
+#Max_edge has to do with interpolation over areas with no points (gaps). To keep interpolation low, since we are looking for gaps, I've set this to 0.
+chm   <- rasterize_canopy(
+  las_n,
+  res = dtm,  # <-- use the DTM raster as a template
+  algorithm = pitfree(thresholds = c(0, 6, 16, 33, 49, 82, 115), max_edge = c(0, 10, 15, 20, 25, 30, 30))
+)
+
+# 4) Post-process (fill tiny holes, light smoothing)
+chm <- terra::focal(chm, w = matrix(1, 3, 3), fun = max, na.policy = "omit")
+chm <- terra::subst(chm, NA, 0) # set NAs to 0 if desired
+
+#evaluate settings
+plot(chm)                 # raster view
+plot(las, color = "Z")  # point cloud colored by height
+
+# 5) Save
+writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm.tif", overwrite = TRUE)
+
+
+
+
+
+
+## NO DTM???? generate one! ----
 
 library(lidR)
 library(terra)
