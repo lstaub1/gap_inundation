@@ -91,17 +91,11 @@ dtm <- rast("F:/MASTERS/THESIS/2026_fresh/DTM/PatuxentTerrain.tif")
 
 plot(dtm)
 
-# (Optional) Classify ground if points aren’t already labeled
-las <- classify_ground(las, csf())  # Cloth Simulation Filter
-
-# Build a DTM (choose an algorithm; TIN is good when ground is well classified)
-dtm <- grid_terrain(las, res = 1, algorithm = tin())
-
 # Ensure CRS matches
 crs(dtm)
 #Looks like the crs of the dtm is Maryland State Plane (SPCS) on NAD83(NSRS2007) in US survey feet, a Lambert Conformal Conic (2SP) projection. The matching EPSG is EPSG:3582 (“NAD83 (NSRS2007) / Maryland (ftUS)”). The DTM is in WTK format, which las does not accept.
 crs(las)
-#Looks like the crs of the las file is Maryland State Plane (SPCS) on NAD83(NSRS2007) using Lambert Conformal Conic (2SP) and US survey feet for the axes. Same as the DTM!
+#Looks like the las file does not have a crs. After checking the metadata, it looks like it has the same projection as the DTM.
 
 # Tell lidR the projection using EPSG (preferred for LAS headers)
 projection(las) <- "EPSG:3582"
@@ -122,7 +116,7 @@ z_sample <- if (length(z) > N) sample(z, N) else z
 # Kernel Density plot
 ggplot(data.frame(Z = z_sample), aes(Z)) +
   geom_density(fill = "orange", alpha = 0.3) +
-  labs(title = "Density of heights", x = "Height above ground (m)", y = "Density") +
+  labs(title = "Density of heights", x = "Height above ground (ft)", y = "Density") +
   theme_minimal()
 
 #Looks like the majority of sampled points fall within 125. 
@@ -131,7 +125,7 @@ ggplot(data.frame(Z = z_sample), aes(Z)) +
 plot(las_n, color = "Z")
 
 # (Optional) Remove obvious outliers and below-ground points
-las_n <- filter_poi(las_n, Z >= 0 & Z <= 200)  # adjust max height for your forest
+las_n <- filter_poi(las_n, Z >= 0 & Z <= 150)  # adjust max height for your forest
 
 #Visually check for outliers
 plot(las_n, color = "Z")
@@ -160,10 +154,14 @@ plot(chm)                 # raster view
 plot(las, color = "Z")  # point cloud colored by height
 
 # 5) Save
-writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm.tif", overwrite = TRUE)
+writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2018_chm.tif", overwrite = TRUE)
 
 
 
+## PATUXENT DIFFERENCE
+
+diff_chm <- chm_y2 - chm_y1
+diff_chm <- mask(diff_chm, !is.na(chm_y1) & !is.na(chm_y2))
 
 
 
@@ -172,13 +170,13 @@ writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm.tif", overw
 library(lidR)
 library(terra)
 
-las <- readLAS("data/pointcloud.laz")
+las <- readLAS("F:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Howard2018a.laz")
 
 # (Optional) Classify ground if points aren’t already labeled
-las <- classify_ground(las, csf())  # Cloth Simulation Filter
+las2 <- classify_ground(las, csf())  # Cloth Simulation Filter
 
 # Build a DTM (choose an algorithm; TIN is good when ground is well classified)
-dtm <- grid_terrain(las, res = 1, algorithm = tin())
+dtm <- grid_terrain(las2, res = 1, algorithm = tin())
 
 # Normalize and build CHM as above
 las_n <- normalize_height(las, dtm)
