@@ -13,6 +13,10 @@ p_load(lidR, terra, ggplot2)
 las <- readLAS("F:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Montgomery2013a.laz")   # or .las
 dtm <- rast("F:/MASTERS/THESIS/2026_fresh/DTM/PatuxentTerrain.tif")             
 
+#Grab las point density
+summary(las)
+#density: 0.22 points/us-ft²
+
 # Ensure CRS matches
 crs(dtm)
 #Looks like the crs of the dtm is Maryland State Plane (SPCS) on NAD83(NSRS2007) in US survey feet, a Lambert Conformal Conic (2SP) projection. The matching EPSG is EPSG:3582 (“NAD83 (NSRS2007) / Maryland (ftUS)”). The DTM is in WTK format, which las does not accept.
@@ -91,6 +95,10 @@ dtm <- rast("F:/MASTERS/THESIS/2026_fresh/DTM/PatuxentTerrain.tif")
 
 plot(dtm)
 
+#Grab las point density
+summary(las)
+#density: 0.46 points/us-ft²
+
 # Ensure CRS matches
 crs(dtm)
 #Looks like the crs of the dtm is Maryland State Plane (SPCS) on NAD83(NSRS2007) in US survey feet, a Lambert Conformal Conic (2SP) projection. The matching EPSG is EPSG:3582 (“NAD83 (NSRS2007) / Maryland (ftUS)”). The DTM is in WTK format, which las does not accept.
@@ -138,25 +146,26 @@ quantile(las_n$Z, c(0.95, 0.99, 0.999), na.rm = TRUE)
 
 # 3) Build the CHM (choose resolution and algorithm)
 # Build CHM that matches DTM's grid by using DTM as the template
-#Max_edge has to do with interpolation over areas with no points (gaps). To keep interpolation low, since we are looking for gaps, I've set this to 0.
+#thresholds are breakdowns of tree heights. 
+#Max_edge has to do with interpolation over areas with no points (gaps). This is dependent on point density. Since this years las file has higher point density, these can be lower. 
 chm   <- rasterize_canopy(
   las_n,
   res = dtm,  # <-- use the DTM raster as a template
-  algorithm = pitfree(thresholds = c(0, 6, 16, 33, 49, 82, 115), max_edge = c(0, 10, 15, 20, 25, 30, 30))
+  algorithm = pitfree(thresholds = c(0, 6, 16, 33, 49, 65, 82, 115, 130), max_edge = c(0, 8, 12, 14, 16, 18, 20, 22, 24, 24))
 )
 
 # 4) Post-process (fill tiny holes, light smoothing)
-chm <- terra::focal(chm, w = matrix(1, 3, 3), fun = max, na.policy = "omit")
-chm <- terra::subst(chm, NA, 0) # set NAs to 0 if desired
+#chm <- terra::focal(chm, w = matrix(1, 3, 3), fun = max, na.policy = "omit")
+#chm <- terra::subst(chm, NA, 0) # set NAs to 0 if desired
 
 #evaluate settings
 plot(chm)                 # raster view
 plot(las, color = "Z")  # point cloud colored by height
 
 # 5) Save
-writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2018_chm.tif", overwrite = TRUE)
+writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2018_chm2.tif", overwrite = TRUE)
 
-
+quantile(values(chm), c(.95, .99, .999), na.rm = TRUE)
 
 ## PATUXENT DIFFERENCE
 
