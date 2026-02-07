@@ -21,7 +21,7 @@ crs_info <- crs(hecras) #
 
 #Grab grid info
 extent<- ext(hecter)
-resolution <- res(hecter) #1.8 by 1.8 ft? 
+resolution <- res(hecter) #1.8 by 1.8 m - confirmed this in metadata
 
 crs_info <- crs(hecter) 
 
@@ -39,6 +39,6 @@ crs_info <- crs(hecras) #
 
 #Grab grid info
 extent<- ext(hecter)
-resolution <- res(hecter) #1.8 by 1.8 ft? 
+resolution <- res(hecter) #1.8 by 1.8 m
 
 crs_info <- crs(hecter) 
