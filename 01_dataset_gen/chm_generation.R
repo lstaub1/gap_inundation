@@ -5,7 +5,7 @@
 #### Purpose: This script takes DTM and a raw point cloud and creates a chm.
 
 library(pacman)
-p_load(lidR, terra, ggplot2)
+p_load(lidR, terra, ggplot2, sf)
 
 
 ## PATUXENT 2013----
@@ -21,10 +21,11 @@ summary(las)
 crs(dtm)
 #Looks like the crs of the dtm is Maryland State Plane (SPCS) on NAD83(NSRS2007) in US survey feet, a Lambert Conformal Conic (2SP) projection. The matching EPSG is EPSG:3582 (“NAD83 (NSRS2007) / Maryland (ftUS)”). The DTM is in WTK format, which las does not accept.
 crs(las)
-#Looks like the crs of the las file is Maryland State Plane (SPCS) on NAD83(NSRS2007) using Lambert Conformal Conic (2SP) and US survey feet for the axes. Same as the DTM!
+#Looks like the crs of the las file is Maryland State Plane (SPCS) on NAD83(NSRS2007) using Lambert Conformal Conic (2SP) and US survey feet for the axes. Same as the DTM! I found this out by bringing the pt cloud into QGIS and....guessing! 
 
 # Tell lidR the projection using EPSG (preferred for LAS headers)
 projection(las) <- "EPSG:3582"
+
 
 # 2) Normalize heights above ground using the DTM
 # This subtracts ground elevation from each point’s Z
@@ -50,17 +51,38 @@ ggplot(data.frame(Z = z_sample), aes(Z)) +
 #Visualize normalized point cloud.
 plot(las_n, color = "Z")
 
-# (Optional) Remove obvious outliers and below-ground points
+#Filter Method 1: Remove obvious outliers and below-ground points
 las_n <- filter_poi(las_n, Z >= 0 & Z <= 200)  # adjust max height for your forest
+
+#Filter Method 2: Statistical outlier removal (SOR)
+# Removes isolated points that are far from their neighbors
+las_clean <- classify_noise(las_n, sor(k = 15, m = 3))
+las_clean <- filter_poi(las_clean, Classification != 18)
+#Remove points that couldn't be normalized
+las_clean <- filter_poi(las_clean, !is.na(Z))
 
 #Visually check for outliers
 plot(las_n, color = "Z")
+
+plot(las_clean, color = "Z")
+
+summary(las_clean@data$Z)
 
 #double check tallest points
 #We know that x and y are in ft, let's make sure z is in ft too.
 #If 99.9th percentile ≈ 35, your Z is in meters.
 #If 99.9th percentile ≈ 125, your Z is in feet.
-quantile(las_n$Z, c(0.95, 0.99, 0.999), na.rm = TRUE)
+quantile(las_clean$Z, c(0.95, 0.99, 0.999), na.rm = TRUE)
+
+# Create CHM, remembering that x and y and z are different units.
+chm <- rasterize_canopy(las_clean, 
+                        res = res(dtm)[1],
+                        algorithm = pitfree(
+                          thresholds = c(0, 6.6, 16.4, 32.8, 49.2, 65.6),
+                          max_edge = c(0, 2.5)))
+
+plot(chm)
+
 
 # 3) Build the CHM (choose resolution and algorithm)
 # Build CHM that matches DTM's grid by using DTM as the template
@@ -70,6 +92,72 @@ chm   <- rasterize_canopy(
   res = dtm,  # <-- use the DTM raster as a template
   algorithm = pitfree(thresholds = c(0, 6, 16, 33, 49, 82, 115), max_edge = c(0, 10, 15, 20, 25, 30, 30))
 )
+
+
+
+
+### P2R algorithm ---- ####
+chm_p2r <- rasterize_canopy(las_n, 
+                        res = res(dtm)[1],  # Match DTM resolution
+                        algorithm = p2r())
+
+plot(chm_p2r)   
+
+chm_p2r <- resample(chm_p2r, dtm, method = "near")
+
+writeRaster(chm_p2r, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm_p2r.tif", overwrite = TRUE)
+
+### Pitfree algorithm ---- ####
+chm_pit <- rasterize_canopy(las_n, 
+                            res = res(dtm)[1],  # Match DTM resolution
+                            algorithm = pitfree())
+
+plot(chm_pit_re)  
+
+chm_pit_re <- resample(chm_pit, dtm, method = "bilinear")
+
+writeRaster(chm_pit_re, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm_pit.tif", overwrite = TRUE)
+
+
+### dsmTIN algorithm ---- ####
+chm_tin <- rasterize_canopy(las_n, 
+                        res = res(dtm)[1],
+                        algorithm = dsmtin())
+
+
+plot(chm_tin_re)  
+
+chm_tin_re <- resample(chm_tin, dtm, method = "bilinear")
+
+writeRaster(chm_tin_re, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm_tin.tif", overwrite = TRUE)
+
+### investigate chm algorithms ---- ####
+difference <- chm_pit_re - chm_tin_re
+plot(difference, main = "Difference: Pitfree - TIN")
+
+## Final algorithm choice ---- ###
+#Going with pit free for now, modifying some of the settings to account for some stripping and small holes. 
+
+# Thresholds in FEET (for height/Z values):
+# 0, 6.6, 16.4, 32.8, 49.2, 65.6 feet
+# which correspond to 0, 2, 5, 10, 15, 20 meters
+
+chm <- rasterize_canopy(las_n, 
+                        res = res(dtm)[1],
+                        algorithm = pitfree(
+                          thresholds = c(0, 6.6, 16.4, 32.8, 49.2, 65.6),
+                          max_edge = c(0, 2.5)))
+
+#Align grids
+chm <- resample(chm, dtm, method = "bilinear")
+chm[chm < 0] <- 0
+
+writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm_pf_t1.tif", overwrite = TRUE)
+
+# Focal smoothing
+chm_final <- focal(chm, w = 3, fun = mean, na.rm = TRUE)
+
+writeRaster(chm_final, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm_pf_t2.tif", overwrite = TRUE)
 
 # 4) Post-process (fill tiny holes, light smoothing)
 chm <- terra::focal(chm, w = matrix(1, 3, 3), fun = max, na.policy = "omit")
