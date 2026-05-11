@@ -1,7 +1,7 @@
 ##### ----- CHM Creation----- #####
 #### Author: Leah E. Staub
 #### Creation Date: 04/25/2023
-#### Update Date: 2/7/2026
+#### Update Date: 5/11/2026
 #### Purpose: This script takes DTM and a raw point cloud and creates a chm.
 
 library(pacman)
@@ -10,31 +10,67 @@ p_load(lidR, terra, ggplot2, sf)
 
 #### PATUXENT 2013----
 # 1) Read the point cloud and DTM
-las <- readLAS("F:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Montgomery2013a.laz")   # or .las
-dtm <- rast("F:/MASTERS/THESIS/2026_fresh/DTM/PatuxentTerrain.tif")             
+las <- readLAS("D:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Montgomery2013a.laz")   # or .las
+dtm <- rast("D:/MASTERS/THESIS/2026_fresh/DTM/PatuxentTerrain.tif")             
+dem <- rast("D:/MASTERS/THESIS/DEMS/montgomery/2013/Montgomery_DEM_2013_1.2m/mont_2013_4ft")
 
 # Spatial info for both datasets ----
-# Ensure CRS matches
+
+# Check out DEM info
 crs(dtm)
 #Looks like the crs of the dtm is Maryland State Plane (SPCS) on NAD83(NSRS2007) in US survey feet, a Lambert Conformal Conic (2SP) projection. The matching EPSG is EPSG:3582 (“NAD83 (NSRS2007) / Maryland (ftUS)”). The DTM is in WTK format, which las does not accept.
+crs(dem)
+#Looks like the DEM is in EPSG:26985, which has z values in feet and x,y values in meters. Let's double check this by looking at the values
+ext(dem)
+global(dem, "range", na.rm = TRUE)
+
+#Check out point cloud info
 crs(las)
 #Looks like the crs of the las file is Maryland State Plane (SPCS) on NAD83(NSRS2007) using Lambert Conformal Conic (2SP) and US survey feet for the axes. Same as the DTM! I found this out by bringing the pt cloud into QGIS and....guessing! 
 
-# Tell lidR the projection using EPSG (preferred for LAS headers)
+# Tell lidR the projection using EPSG (preferred for LAS headers)- this is the dtm proj 
 projection(las) <- "EPSG:3582"
+
+## Going to run this whole script again but with the MDimap DEM to attempt to get rid of flight lines
+las_ext <- ext(las) #Get extent of pre-clipped point cloud
+ext(las)
+ext(dem)
+
+las_xmin <- 1290888.75 / 3.28084
+las_xmax <- 1298191.34 / 3.28084
+las_ymin <- 571517.35  / 3.28084
+las_ymax <- 579082.74  / 3.28084
+
+crop_ext <- ext(las_xmin, las_xmax, las_ymin, las_ymax)
+crop_ext 
+
+#clip dem to pt cloud extent
+dem_clipped <- crop(dem, crop_ext)
+
+#project the clipped DEM to EPSG:3582
+dem_ft <- project(dem_clipped, "EPSG:3582")
+
+ext(dem_ft)        # should be ~1,290,000–1,298,000 X, ~571,000–579,000 Y
+global(dem_ft, "range", na.rm = TRUE)   # Z should still be roughly 0–390 feet
+
 
 # DTM data Handling ----
 #We know from the crs that our x and y values are in feet, this also was confirmed in QGIS. Let's see if the z value is in feet too.
 # If values are ~100-500: likely feet
 # If values are ~30-150: likely meters
 summary(values(dtm)) #Max is 545, so looks like z value is in feet. 
-
+summary(values(dem_ft)) 
 # We know that 1.8 m grid size is too small for a chm. Let's try to make our CHM 5.4 ft res. 
 # To do this, we need to make sure that our source raster (DTM) is able to scale up to 5.4 ft. 
 # If it's number of pixels rows and columns are not able to scale up, we will need to add a row of no data to the raster. 
 dtm_dims <- dim(dtm)
 nrows <- dtm_dims[1]
 ncols <- dtm_dims[2]
+
+dem_dims <- dim(dem_ft)
+nrows <- dem_dims[1]
+ncols <- dem_dims[2]
+
 
 cat("Rows:", nrows, "\n")
 cat("Cols:", ncols, "\n\n")
@@ -46,22 +82,33 @@ cat("Cols ÷ 3 =", ncols / 3, "(Remainder:", ncols %% 3, ")\n\n")
 #If there is a remainder in rows, we need to pad the rows. Ditto for columns.
 
 #If padding is needed, we need to extend raster
-#In this case we just need to pad the columns.
+#In this case (using the DTM) we just need to pad the columns.
+#For the DEM we need to pad both columns and rows
 
 #Check what we need
-#target_rows <- ceiling(nrows / 3) * 3
+target_rows <- ceiling(nrows / 3) * 3
+target_rows #1893 for dem
 target_cols <- ceiling(ncols / 3) * 3
-target_cols #4059
-cols_to_add <- target_cols - ncol(dtm)  #4059-4057 = 2 ~ we just need to add 2 columns
+target_cols #4059 for dtm, 1827 for dem
+cols_to_add <- target_cols - ncol(dem_ft)  #4059-4057 = 2 ~ we just need to add 2 columns
+#1826-1827 = 1 col to add for dem
 cols_to_add
+rows_to_add <- target_rows - nrow(dem_ft)
+rows_to_add
+# 1891-1893 = 2 rows to add for dem
+
 
 #Specify extent to add on each side (left, right, bottom, top)
 # To add 2 columns on the right: c(0, 2, 0, 0)
 dtm_padded <- extend(dtm, c(0, cols_to_add, 0, 0))
+dem_padded <- extend(dtm, c(0, cols_to_add, rows_to_add, 0))
 
 #Check to make sure padding worked
 cat("New dimensions:", dim(dtm_padded), "\n")
 cat("Cols ÷ 3 =", ncol(dtm_padded) / 3, "\n")
+
+cat("New dimensions:", dim(dem_padded), "\n")
+cat("Cols ÷ 3 =", ncol(dem_padded) / 3, "\n")
 
 # Point Cloud Data Handling ----
 #Grab las point density
@@ -71,6 +118,7 @@ summary(las)
 # Normalize heights above ground using the DTM
 # This subtracts ground elevation from each point’s Z
 las_n <- normalize_height(las, dtm)
+las_n <- normalize_height(las, dem_padded)
 
 #Check out height distribution of normalized data
 summary(las_n@data$Z)
@@ -177,8 +225,14 @@ chm <- rasterize_canopy(las_n,
                           thresholds = c(0, 6.6, 16.4, 32.8, 49.2, 65.6),
                           max_edge = c(0, 2.5)))
 
+chm <- rasterize_canopy(las_n, 
+                        res = res(dem_padded)[1],
+                        algorithm = pitfree(
+                          thresholds = c(0, 6.6, 16.4, 32.8, 49.2, 65.6),
+                          max_edge = c(0, 2.5)))
+
 #Align grids
-chm <- resample(chm, dtm, method = "bilinear")
+chm <- resample(chm, dem_padded, method = "bilinear")
 chm[chm < 0] <- 0
 
 writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm_pf_t1.tif", overwrite = TRUE)
@@ -197,7 +251,7 @@ plot(chm)                 # raster view
 plot(las, color = "Z")  # point cloud colored by height
 
 # 5) Save
-writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm.tif", overwrite = TRUE)
+writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/dem_Patuxent_2013_chm.tif", overwrite = TRUE)
 
 
 
@@ -218,7 +272,7 @@ chm_10.8ft <- rasterize_canopy(las_clean,
                               res = 10.8,  # 10.8 feet resolution
                               algorithm = pitfree())
 
-writeRaster(chm_10.8ft, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm_10.8.tif", overwrite = TRUE)
+writeRaster(chm_10.8ft, "D:/MASTERS/THESIS/2026_fresh/CHM/dem_Patuxent_2013_chm_10.8.tif", overwrite = TRUE)
 
 chm_16.2ft <- rasterize_canopy(las_clean, 
                                res = 16.2,  # 10.8 feet resolution
@@ -241,10 +295,12 @@ chm   <- rasterize_canopy(
 
 ## PATUXENT 2018----
 # 1) Read the point cloud and DTM
-las <- readLAS("F:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Howard2018a.laz")   # or .las
-dtm <- rast("F:/MASTERS/THESIS/2026_fresh/DTM/PatuxentTerrain.tif")             
+las <- readLAS("D:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Howard2018a.laz")   # or .las
+dtm <- rast("F:/MASTERS/THESIS/2026_fresh/DTM/PatuxentTerrain.tif")   
+dem <- rast("D:/MASTERS/THESIS/DEMS/howard/Howard_DEM_2018_2ft_m/howard_2ft_m") 
 
 plot(dtm)
+plot(dem_ft)
 
 #Grab las point density
 summary(las)
@@ -252,6 +308,7 @@ summary(las)
 
 # Ensure CRS matches
 crs(dtm)
+crs(dem)
 #Looks like the crs of the dtm is Maryland State Plane (SPCS) on NAD83(NSRS2007) in US survey feet, a Lambert Conformal Conic (2SP) projection. The matching EPSG is EPSG:3582 (“NAD83 (NSRS2007) / Maryland (ftUS)”). The DTM is in WTK format, which las does not accept.
 crs(las)
 #Looks like the las file does not have a crs. After checking the metadata, it looks like it has the same projection as the DTM.
@@ -259,12 +316,32 @@ crs(las)
 # Tell lidR the projection using EPSG (preferred for LAS headers)
 projection(las) <- "EPSG:3582"
 
+ext(las)
+ext(dem)
+
+#The dem and the pt cloud are in same crs and same units! We can just use the extent of the las as is to crop the dem. 
+
+
+#clip dem to pt cloud extent
+dem_clipped <- crop(dem, ext(las))
+
+#project the clipped DEM to EPSG:3582
+dem_ft <- project(dem_clipped, "EPSG:3582")
+
+ext(dem_ft)        # should be ~1,290,000–1,298,000 X, ~571,000–579,000 Y
+global(dem_ft, "range", na.rm = TRUE)   # Z should still be roughly 0–390 feet
+
+
+#DEM z values are in meters! Convert to feet
+dem_ft_z <- dem_ft * 3.28084
 # 2) Normalize heights above ground using the DTM
 # This subtracts ground elevation from each point’s Z
-las_n <- normalize_height(las, dtm)
+las_n <- normalize_height(las, dem_ft_z)
 
 #Check out height distribution of normalized data
 summary(las_n@data$Z)
+
+summary(las@data$Z)
 # Sample up to N points for plotting
 set.seed(42)
 N <- 5e6
@@ -286,6 +363,7 @@ plot(las_n, color = "Z")
 # (Optional) Remove obvious outliers and below-ground points
 las_n <- filter_poi(las_n, Z >= 0 & Z <= 150)  # adjust max height for your forest
 
+
 #Visually check for outliers
 plot(las_n, color = "Z")
 
@@ -305,6 +383,13 @@ chm   <- rasterize_canopy(
   algorithm = pitfree(thresholds = c(0, 6, 16, 33, 49, 65, 82, 115, 130), max_edge = c(0, 8, 12, 14, 16, 18, 20, 22, 24, 24))
 )
 
+
+chm_10.8ft <- rasterize_canopy(las_n, 
+                               res = 10.8,  # 10.8 feet resolution
+                               algorithm = pitfree())
+
+writeRaster(chm_10.8ft, "D:/MASTERS/THESIS/2026_fresh/CHM/dem_Patuxent_2018_chm_10.8.tif", overwrite = TRUE)
+
 # 4) Post-process (fill tiny holes, light smoothing)
 #chm <- terra::focal(chm, w = matrix(1, 3, 3), fun = max, na.policy = "omit")
 #chm <- terra::subst(chm, NA, 0) # set NAs to 0 if desired
@@ -319,11 +404,19 @@ writeRaster(chm, "F:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2018_chm2.tif", over
 quantile(values(chm), c(.95, .99, .999), na.rm = TRUE)
 
 ## PATUXENT DIFFERENCE
+chm13 <- rast("D:/MASTERS/THESIS/2026_fresh/CHM/dem_Patuxent_2013_chm_10.8.tif")
+chm18<- rast("D:/MASTERS/THESIS/2026_fresh/CHM/dem_Patuxent_2018_chm_10.8.tif")
+
+
 
 diff_chm <- chm_y2 - chm_y1
 diff_chm <- mask(diff_chm, !is.na(chm_y1) & !is.na(chm_y2))
 
+diff_chm <- chm18 - chm13
+diff_chm <- mask(diff_chm, !is.na(chm13) & !is.na(chm18))
+plot(diff_chm)
 
+writeRaster(diff_chm, "D:/MASTERS/THESIS/2026_fresh/CHM/dem_Patuxent_diff.tif", overwrite = TRUE)
 
 ## NO DTM???? generate one! ----
 
