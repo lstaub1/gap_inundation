@@ -12,14 +12,14 @@ p_load(lidR, terra, ggplot2, sf)
 # 1) Read the point cloud and DTM
 las <- readLAS("D:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Montgomery2013a.laz")   # or .las
 dtm <- rast("D:/MASTERS/THESIS/2026_fresh/DTM/PatuxentTerrain.tif")             
-dem <- rast("D:/MASTERS/THESIS/DEMS/montgomery/2013/Montgomery_DEM_2013_1.2m/mont_2013_4ft")
+dem13 <- rast("D:/MASTERS/THESIS/DEMS/montgomery/2013/Montgomery_DEM_2013_1.2m/mont_2013_4ft")
 
 # Spatial info for both datasets ----
 
 # Check out DEM info
 crs(dtm)
 #Looks like the crs of the dtm is Maryland State Plane (SPCS) on NAD83(NSRS2007) in US survey feet, a Lambert Conformal Conic (2SP) projection. The matching EPSG is EPSG:3582 (“NAD83 (NSRS2007) / Maryland (ftUS)”). The DTM is in WTK format, which las does not accept.
-crs(dem)
+crs(dem13)
 #Looks like the DEM is in EPSG:26985, which has z values in feet and x,y values in meters. Let's double check this by looking at the values
 ext(dem)
 global(dem, "range", na.rm = TRUE)
@@ -297,7 +297,7 @@ chm   <- rasterize_canopy(
 # 1) Read the point cloud and DTM
 las <- readLAS("D:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Howard2018a.laz")   # or .las
 dtm <- rast("F:/MASTERS/THESIS/2026_fresh/DTM/PatuxentTerrain.tif")   
-dem <- rast("D:/MASTERS/THESIS/DEMS/howard/Howard_DEM_2018_2ft_m/howard_2ft_m") 
+dem18 <- rast("D:/MASTERS/THESIS/DEMS/howard/Howard_DEM_2018_2ft_m/howard_2ft_m") 
 
 plot(dtm)
 plot(dem_ft)
@@ -308,7 +308,7 @@ summary(las)
 
 # Ensure CRS matches
 crs(dtm)
-crs(dem)
+crs(dem18)
 #Looks like the crs of the dtm is Maryland State Plane (SPCS) on NAD83(NSRS2007) in US survey feet, a Lambert Conformal Conic (2SP) projection. The matching EPSG is EPSG:3582 (“NAD83 (NSRS2007) / Maryland (ftUS)”). The DTM is in WTK format, which las does not accept.
 crs(las)
 #Looks like the las file does not have a crs. After checking the metadata, it looks like it has the same projection as the DTM.
@@ -417,6 +417,64 @@ diff_chm <- mask(diff_chm, !is.na(chm13) & !is.na(chm18))
 plot(diff_chm)
 
 writeRaster(diff_chm, "D:/MASTERS/THESIS/2026_fresh/CHM/dem_Patuxent_diff.tif", overwrite = TRUE)
+
+
+
+
+
+#DIFFERENCING ------
+#Load the two dems from mdimap
+dem13 <- rast("D:/MASTERS/THESIS/DEMS/montgomery/2013/Montgomery_DEM_2013_1.2m/mont_2013_4ft")
+dem18 <- rast("D:/MASTERS/THESIS/DEMS/howard/Howard_DEM_2018_2ft_m/howard_2ft_m") 
+
+#the crs of the two dems differ
+crs(dem13)
+crs(dem18)
+
+#The range of elevation values of the dems appear to both be in meters
+minmax(dem13)
+minmax(dem18)
+
+#Grab the extent of my clipped pt cloud to clip the dem to 
+las <- readLAS("D:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Montgomery2013a.laz")
+
+las_ext <- ext(las) #Get extent of pre-clipped point cloud
+ext(las)
+
+las_xmin <- 1290888.75 / 3.28084
+las_xmax <- 1298191.34 / 3.28084
+las_ymin <- 571517.35  / 3.28084
+las_ymax <- 579082.74  / 3.28084
+
+crop_ext <- ext(las_xmin, las_xmax, las_ymin, las_ymax)
+crop_ext 
+
+#Get extent of 2018 las
+las18 <- readLAS("D:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Howard2018a.laz")
+projection(las18) <- "EPSG:3582"
+
+
+#clip dem to pt cloud extent
+dem13_clipped <- crop(dem13, crop_ext)
+dem18_clipped <- crop(dem18, ext(las18))
+
+
+#dem 18 has an unnamed crs while crs13 has one. Lets reproject.
+dem18_reproj <- project(dem18_clipped, crs(dem13_clipped))
+
+#resample so grids match up
+dem18_resampled <- resample(dem18_reproj, dem13_clipped)
+
+#subtract from each other to see the diff
+dod <- dem18_resampled - dem13_clipped
+
+writeRaster(dod, "D:/MASTERS/THESIS/2026_fresh/CHM/demdiff_5yr.tif")
+
+
+
+
+
+
 
 ## NO DTM???? generate one! ----
 
