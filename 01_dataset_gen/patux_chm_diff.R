@@ -1,7 +1,7 @@
 ##### ----- Patuxent CHM Creation Workflow ----- #####
 #### Author: Leah E. Staub
 #### Creation Date: 04/25/2023
-#### Update Date: 06/26/2026
+#### Update Date: 10/05/2026
 #### Purpose: For two years of lidar data (2013, 2018), this script:
 ####          - Loads and inspects point cloud spatial info & acquisition metadata
 ####          - Loads and prepares a shared DTM
@@ -17,7 +17,8 @@ p_load(lidR, terra, ggplot2, sf, tidyterra, patchwork, dplyr)
 
 ## ---- Helper functions ----------------------------------------------------------------------------
 
-# List present PointSourceIDs (with counts)
+# List present PointSourceIDs ---
+# counts points per flight strip (PointSourceID)
 pointsource_summary <- function(las) {
   df <- as.data.frame(las@data[, "PointSourceID", drop = FALSE])
   df %>%
@@ -25,7 +26,8 @@ pointsource_summary <- function(las) {
     arrange(desc(n_pts))
 }
 
-# Basic acquisition stats
+# Basic acquisition stats ---
+# computes density, pulse rate, Z range, flight line count per dataset
 
 basic_point_stats <- function(las, label) {
   # Extent-based area (map units are US survey feet in EPSG:3582)
@@ -64,16 +66,18 @@ basic_point_stats <- function(las, label) {
 }
 
 
-# Cleaning workflow: remove negative, extreme outliers, then SOR
-clean_las <- function(las_n, max_height = 200, sor_k = 15, sor_m = 3) {
-  las_f <- filter_poi(las_n, Z >= 0 & Z <= max_height)
-  las_f <- classify_noise(las_f, sor(k = sor_k, m = sor_m))
-  las_f <- filter_poi(las_f, Classification != 18)             # remove noise points
-  las_f <- filter_poi(las_f, !is.na(Z))                        # remove failed normalization
+# Cleaning workflow --- 
+# Statistical Outlier Removal (SOR)
+# SOR removes points far from any neighboring points.
+
+clean_las <- function(las_n, min_height = -0.5, max_height = 200) {
+  las_f <- filter_poi(las_n, Z >= min_height & Z <= max_height)
+  las_f <- filter_poi(las_f, !is.na(Z))
   las_f
 }
 
-# Flightline quality assessment on normalized heights
+
+# Flightline quality assessment on normalized heights #MAYBE REMOVE THIS ENTIRELY?
 # Computes near-ground residual by strip; if offsets exceed tolerance, apply corrections.
 flightline_quality_and_correction <- function(
     las_raw, las_norm_clean,
@@ -228,6 +232,11 @@ plot_flightline_diagnosis <- function(las, diff_raster, year_label, out_path) {
 las13 <- readLAS("D:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Montgomery2013a.laz")
 las18 <- readLAS("D:/MASTERS/THESIS/2026_fresh/Clipped_Lidar/Howard2018a.laz")
 
+# 2013 Z is in meters — convert to US survey feet to match DTM and 2018
+# 1 m = 3.280833333 US survey ft
+#las13@data$Z <- las13@data$Z * 3.280833333
+#cat("2013 Z converted from meters to US survey feet.\n")
+
 cat("===== 2013 LAS =====\n")
 crs(las13)
 ext(las13)
@@ -273,7 +282,7 @@ print(meta18)
 cat("Number of flight lines (2013):", nrow(ps13), "\n")
 cat("Number of flight lines (2018):", nrow(ps18), "\n")
 
-## ==== SECTION 4  Load DTM ==========================================
+## ==== SECTION 4  Create DEMs ==========================================
 
 # Shared DTM for normalizing both years
 # CRS: EPSG:3582 (Maryland State Plane NAD83 NSRS2007, US survey feet)
@@ -285,34 +294,24 @@ print(ext(dtm))
 print(summary(values(dtm)))
 
 ## =============================================================================
-## SECTION 5  Prepare DTM
-##     - Pad dimensions if necessary
-##     - Verify CRS
-##     - Verify units
+## SECTION 4b  Build year-specific DEMs from raw point clouds
 ## =============================================================================
 
-# Ensure rows & cols divisible by 3 (for 3× resampling grids like 10.8 ft)
-dtm_dims <- dim(dtm)
-nrows <- dtm_dims[1]; ncols <- dtm_dims[2]
-cat("DTM dimensions — Rows:", nrows, "| Cols:", ncols, "\n")
-cat("Rows ÷ 3 remainder:", nrows %% 3, "\n")
-cat("Cols ÷ 3 remainder:", ncols %% 3, "\n")
+# Use ground points only for terrain interpolation
+# TIN (triangulated irregular network) is the standard for lidar DEMs
+dem13 <- rasterize_terrain(las13, res = 10.8, algorithm = tin())
+dem18 <- rasterize_terrain(las18, res = 10.8, algorithm = tin())
 
-target_rows <- ceiling(nrows / 3) * 3
-target_cols <- ceiling(ncols / 3) * 3
-rows_to_add <- target_rows - nrows
-cols_to_add <- target_cols - ncols
-cat("Padding — Rows to add:", rows_to_add, "| Cols to add:", cols_to_add, "\n")
+writeRaster(dem13, "D:/MASTERS/THESIS/2026_fresh/Data/Patuxent_dem13_10.8ft.tif", overwrite = TRUE)
+writeRaster(dem18, "D:/MASTERS/THESIS/2026_fresh/Data/Patuxent_dem18_10.8ft.tif", overwrite = TRUE)
 
-dtm_padded <- extend(dtm, c(cols_to_add, 0, 0, rows_to_add))
-cat("Padded DTM dimensions:", dim(dtm_padded), "\n")
-cat("Cols ÷ 3:", ncol(dtm_padded) / 3, "| Rows ÷ 3:", nrow(dtm_padded) / 3, "\n")
+cat("DEM extents:\n")
+print(ext(dem13))
+print(ext(dem18))
+cat("DEM value ranges:\n")
+print(global(dem13, c("min", "mean", "max"), na.rm = TRUE))
+print(global(dem18, c("min", "mean", "max"), na.rm = TRUE))
 
-# CRS & units checks (informational)
-stopifnot(grepl("US survey foot", terra::crs(dtm_padded)))
-# Double check make sure it's correct
-terra::crs(dtm_padded)
-cat("DTM CRS verified as EPSG:3582 (US-ft). Z units expected to be feet.\n")
 
 ## =============================================================================
 ## SECTION 6  Normalize point clouds
@@ -321,10 +320,23 @@ cat("DTM CRS verified as EPSG:3582 (US-ft). Z units expected to be feet.\n")
 ## =============================================================================
 
 cat("===== Normalizing 2013 =====\n")
-las13_n <- normalize_height(las13, dtm_padded)
+las13_n <- normalize_height(las13, dem13)
+
+cat("\n===== Acquisition Metadata =====\n")
+meta13 <- basic_point_stats(las13_n, "2013")
+print(meta13)
+
+
+writeLAS(las13_n, "D:/MASTERS/THESIS/2026_fresh/Data/las13_n.las")
 
 cat("===== Normalizing 2018 =====\n")
-las18_n <- normalize_height(las18, dtm_padded)
+las18_n <- normalize_height(las18, dem18)
+
+cat("\n===== Acquisition Metadata =====\n")
+meta18 <- basic_point_stats(las18_n, "2018")
+print(meta18)
+
+writeLAS(las18_n, "D:/MASTERS/THESIS/2026_fresh/Data/las18_n.las")
 
 # Quick summaries
 cat("\n--- 2013 normalized Z summary ---\n")
@@ -343,61 +355,179 @@ print(quantile(las18_n$Z, seq(0, 1, 0.1), na.rm = TRUE))
 ## =============================================================================
 
 cat("\n===== Cleaning 2013 =====\n")
-las13_clean <- clean_las(las13_n, max_height = 200)
+las13_clean <- clean_las(las13_n)
 cat("2013 points remaining:", nrow(las13_clean@data), "\n")
 print(summary(las13_clean@data$Z))
 
+cat("\n===== Acquisition Metadata =====\n")
+meta13 <- basic_point_stats(las13_clean, "2013")
+print(meta13)
+
+writeLAS(las13_clean,"D:/MASTERS/THESIS/2026_fresh/Data/las13_clean.las")
+
+
 cat("\n===== Cleaning 2018 =====\n")
-las18_clean <- clean_las(las18_n, max_height = 150)
+las18_clean <- clean_las(las18_n)
 cat("2018 points remaining:", nrow(las18_clean@data), "\n")
 print(summary(las18_clean@data$Z))
 
+writeLAS(las18_clean,"D:/MASTERS/THESIS/2026_fresh/Data/las18_clean.las")
+
+# Quick summaries
+cat("\n--- 2013 cleaned Z summary ---\n")
+print(summary(las13_clean@data$Z))
+print(quantile(las13_clean$Z, seq(0, 1, 0.1), na.rm = TRUE))
+
+cat("\n--- 2018 cleaned Z summary ---\n")
+print(summary(las18_clean@data$Z))
+print(quantile(las18_clean$Z, seq(0, 1, 0.1), na.rm = TRUE))
+
+
 ## =============================================================================
-## SECTION 8  Flightline Quality Assessment
-##     - Compute ground-height statistics by PointSourceID
-##     - Determine whether flightlines exhibit systematic vertical offsets
-##     - If offsets exceed tolerance:
-##           compute strip corrections
-##           apply corrections
-##           regenerate normalized cloud
-##           (or apply correction directly to normalized heights)
+## Checking removed points
 ## =============================================================================
+#Spatially mapped the removed points after las cleaning
+# Get row indices of points remaining after cleaning
+# Match on XYZ since there's no persistent point ID in lidR
+kept <- paste(las13_clean@data$X, las13_clean@data$Y, las13_clean@data$Z)
+all  <- paste(las13_n@data$X,     las13_n@data$Y,     las13_n@data$Z)
 
-cat("\n===== Flightline QA: 2013 =====\n")
-qa13 <- flightline_quality_and_correction(
-  las_raw = las13,
-  las_norm_clean = las13_clean,
-  good_strips = NULL,       # or c(30214, 30215) if known good reference strips
-  tol_ft = 0.5,
-  ground_window = c(-1, 2),
-  apply_to = "normalized",  # default: adjust normalized heights
-  dtm = dtm_padded
+removed_idx <- which(!all %in% kept)
+cat("Points removed:", length(removed_idx), "\n")
+
+df_removed <- as.data.frame(las13_n@data[removed_idx, c("X", "Y", "Z")])
+
+# Sample if large
+set.seed(42)
+if (nrow(df_removed) > 200000) df_removed <- df_removed[sample(nrow(df_removed), 200000), ]
+
+ggsave(
+  "D:/MASTERS/THESIS/2026_fresh/Data/removedpts13_hist.png",
+  ggplot(df_removed, aes(x = X, y = Y, color = Z)) +
+    geom_point(size = 0.3, alpha = 0.6) +
+    scale_color_viridis_c(name = "Height (ft)", option = "plasma") +
+    labs(
+      title = "Spatially Removed Points (las13_n → las13_clean)",
+      subtitle = paste0("n = ", nrow(df_removed), " removed points shown"),
+      x = "Easting (ft)", y = "Northing (ft)"
+    ) +
+    coord_equal() +
+    theme_minimal()
 )
-las13_qc <- qa13$corrected_norm
-cat("2013 reference near-ground median:", round(qa13$reference, 3), "ft\n")
-cat("2013: correction applied?", qa13$applied, "\n")
-print(qa13$offsets)
 
-# Re-clean after correction to ensure no negatives/outliers were introduced
-las13_qc <- clean_las(las13_qc, max_height = 200)
 
-cat("\n===== Flightline QA: 2018 =====\n")
-qa18 <- flightline_quality_and_correction(
-  las_raw = las18,
-  las_norm_clean = las18_clean,
-  good_strips = NULL,
-  tol_ft = 0.5,
-  ground_window = c(-1, 2),
-  apply_to = "normalized",
-  dtm = dtm_padded
+kept <- paste(las18_clean@data$X, las18_clean@data$Y, las18_clean@data$Z)
+all  <- paste(las18_n@data$X,     las18_n@data$Y,     las18_n@data$Z)
+
+removed_idx <- which(!all %in% kept)
+cat("Points removed:", length(removed_idx), "\n")
+
+df_removed <- as.data.frame(las18_n@data[removed_idx, c("X", "Y", "Z")])
+
+# Sample if large
+set.seed(42)
+if (nrow(df_removed) > 200000) df_removed <- df_removed[sample(nrow(df_removed), 200000), ]
+
+ggsave(
+  "D:/MASTERS/THESIS/2026_fresh/Data/removedpts18_hist.png",
+  ggplot(df_removed, aes(x = X, y = Y, color = Z)) +
+    geom_point(size = 0.3, alpha = 0.6) +
+    scale_color_viridis_c(name = "Height (ft)", option = "plasma") +
+    labs(
+      title = "Spatially Removed Points (las18_n → las18_clean)",
+      subtitle = paste0("n = ", nrow(df_removed), " removed points shown"),
+      x = "Easting (ft)", y = "Northing (ft)"
+    ) +
+    coord_equal() +
+    theme_minimal()
 )
-las18_qc <- qa18$corrected_norm
-cat("2018 reference near-ground median:", round(qa18$reference, 3), "ft\n")
-cat("2018: correction applied?", qa18$applied, "\n")
-print(qa18$offsets)
 
-# Re-clean after correction
-las18_qc <- clean_las(las18_qc, max_height = 150)
+# Compare raw Z ranges
+summary(las13@data$Z)
+summary(las18@data$Z)
+
+
+# If 2013 Z range is ~3.28x larger than 2018, it's a units issue
+# If 2013 Z range is shifted by ~100-115 ft, it's likely a datum issue
+
+#looks good!
+
+##=============================================================================
+## SECTION 8  Pulse Density Raster
+##    - Create pulse density raster
+##    - Identify strips with poor pulse density
+##    - Plot flightlines on top of density raster
+##    - Pulse density raster can be used later on as a mask for the chm differences
+##==============================================================================
+
+# Pulse density raster (first returns only = one per pulse)
+density13 <- rasterize_density(las13_clean, res = 10.8)
+density18 <- rasterize_density(las18_clean, res = 10.8)
+
+writeRaster(density13, "D:/MASTERS/THESIS/2026_fresh/Data/density13_10.8ft.tif", overwrite = TRUE)
+writeRaster(density18, "D:/MASTERS/THESIS/2026_fresh/Data/density18_10.8ft.tif", overwrite = TRUE)
+
+#understand distribution of densities
+vals13 <- values(density13, na.rm = TRUE)
+summary(vals13)
+ggsave(
+  "D:/MASTERS/THESIS/2026_fresh/Data/density13_hist.png",
+  ggplot(data.frame(density = vals13), aes(x = density)) +
+    geom_histogram(bins = 50, fill = "#377eb8", color = "white") +
+    labs(title = "2013 Pulse Density Distribution", x = "pulses/ft²", y = "Count") +
+    theme_minimal(),
+  width = 8, height = 5, dpi = 150
+)
+
+vals18 <- values(density18, na.rm = TRUE)
+summary(vals18)
+ggsave(
+  "D:/MASTERS/THESIS/2026_fresh/Data/density18_hist.png",
+  ggplot(data.frame(density = vals18), aes(x = density)) +
+    geom_histogram(bins = 50, fill = "#377eb8", color = "white") +
+    labs(title = "2018 Pulse Density Distribution", x = "pulses/ft²", y = "Count") +
+    theme_minimal(),
+  width = 8, height = 5, dpi = 150
+)
+
+#understand density distribution based on flight lines
+# --- Summarize mean pulse density per strip ---
+density13_r <- rast(density13)  # ensure it's a SpatRaster
+
+strip_density_summary <- function(las_clean, density_rast, label) {
+  pts <- as.data.frame(las_clean@data[, c("X", "Y", "PointSourceID")])
+  pts_sf <- st_as_sf(pts, coords = c("X", "Y"), crs = 3582)
+  
+  # Extract density value at each point location
+  pts_sf$pixel_density <- terra::extract(density_rast, pts_sf)[, 2]
+  
+  pts_sf %>%
+    st_drop_geometry() %>%
+    group_by(PointSourceID) %>%
+    summarise(
+      mean_density = mean(pixel_density, na.rm = TRUE),
+      min_density  = min(pixel_density, na.rm = TRUE),
+      n_pts        = n(),
+      .groups = "drop"
+    ) %>%
+    arrange(mean_density) %>%
+    mutate(year = label)
+}
+
+strip13 <- strip_density_summary(las13_clean, density13, "2013")
+strip18 <- strip_density_summary(las18_clean, density18,   "2018")
+
+print(strip13)
+print(strip18)
+
+#all of the minimums are 0.00857, this must be the equivalent of 0. Let's get a better idea of what the floor looks like
+thresholds <- c(0.00857, 0.02, 0.05, 0.10)
+for (t in thresholds) {
+  cat(sprintf("Below %.5f — 2013: %.1f%%  |  2018: %.1f%%\n",
+      t,
+      100 * mean(vals13 < t, na.rm = TRUE),
+      100 * mean(vals18 < t, na.rm = TRUE)))
+}
 
 ## =============================================================================
 ## SECTION 9  Build CHMs
@@ -408,48 +538,52 @@ pitfree_thresholds <- c(0, 6.6, 16.4, 32.8, 49.2, 65.6)
 
 cat("\n===== Building 2013 CHM =====\n")
 chm13_r <- rasterize_canopy(
-  las13_qc,
+  las13_clean,
   res = 10.8,
   algorithm = pitfree(
     thresholds = pitfree_thresholds,
     max_edge   = c(0, 2.5)
   )
 )
-chm13_r[chm13_r < 0] <- 0
 
-# Convert to SpatRaster for terra I/O
-chm13 <- rast(chm13_r)
+# Apply pulse density mask to 2013 CHM
+# Cells below threshold are treated as no-data (gaps in coverage)
+density_threshold <- 0  # adjust based on your distribution
+density13_r <- resample(density13, chm13_r, method = "near")
+mask13 <- ifel(density13_r == 0, NA, 1)
+chm13 <- mask(chm13_r, mask13)
+
 
 writeRaster(
   chm13,
-  "D:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2013_chm_10.8ft.tif",
+  "D:/MASTERS/THESIS/2026_fresh/CHM_new/Patuxent_2013_chm_10.8ft.tif",
   overwrite = TRUE
 )
-cat("2013 CHM saved.\n")
+
 
 cat("\n===== Building 2018 CHM =====\n")
 chm18_r <- rasterize_canopy(
-  las18_qc,
+  las18_clean,
   res = 10.8,
   algorithm = pitfree(
     thresholds = pitfree_thresholds,
     max_edge   = c(0, 2.5)
   )
 )
-chm18_r[chm18_r < 0] <- 0
 
-chm18 <- rast(chm18_r)
+# Apply pulse density mask to 2013 CHM
+# Cells below threshold are treated as no-data (gaps in coverage)
+density_threshold <- 0  # adjust based on your distribution
+density18_r <- resample(density18, chm18_r, method = "near")
+mask18 <- ifel(density18_r == 0, NA, 1)
+chm18 <- mask(chm18_r, mask18)
+
 
 writeRaster(
   chm18,
-  "D:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_2018_chm_10.8ft.tif",
+  "D:/MASTERS/THESIS/2026_fresh/CHM_new/Patuxent_2018_chm_10.8ft.tif",
   overwrite = TRUE
 )
-cat("2018 CHM saved.\n")
-
-# Quick visual check
-plot(chm13, main = "2013 CHM (10.8 ft)")
-plot(chm18, main = "2018 CHM (10.8 ft)")
 
 ## =============================================================================
 ## SECTION 10  Difference CHM
@@ -470,7 +604,7 @@ plot(
 
 writeRaster(
   diff_chm,
-  "D:/MASTERS/THESIS/2026_fresh/CHM/Patuxent_diff_2018minus2013.tif",
+  "D:/MASTERS/THESIS/2026_fresh/CHM_new/Patuxent_diff_2018minus2013.tif",
   overwrite = TRUE
 )
 cat("Difference raster saved.\n")
@@ -483,43 +617,4 @@ cat("% cells with loss (< -2 ft):",
     round(100 * sum(vals < -2, na.rm = TRUE) / sum(!is.na(vals)), 1), "%\n")
 cat("% cells with gain (>  2 ft): ",
     round(100 * sum(vals >  2, na.rm = TRUE) / sum(!is.na(vals)), 1), "%\n")
-
-## =============================================================================
-## SECTION 11  Diagnostic figures
-## =============================================================================
-
-# 11a. Flightline vs. CHM-diff comparison (using QA-corrected 2013 cloud)
-diag_path <- "D:/MASTERS/THESIS/2026_fresh/CHM/flightline_diagnosis.png"
-plot_flightline_diagnosis(
-  las = las13_qc,
-  diff_raster = diff_chm,
-  year_label = "2013 (QC)",
-  out_path = diag_path
-)
-
-# 11b. Strip offset barplots (saved as PNGs)
-offset_plot <- function(offsets_df, year_label, out_path) {
-  p <- ggplot(offsets_df, aes(x = factor(PointSourceID), y = offset_ft)) +
-    geom_hline(yintercept = 0, color = "grey50") +
-    geom_col(fill = "#377eb8") +
-    labs(
-      title = paste("Strip Offsets (near-ground) —", year_label),
-      x = "PointSourceID", y = "Offset (ft; ref - median_groundZ)"
-    ) +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
-  ggsave(out_path, p, width = 12, height = 6, dpi = 200)
-  cat("Saved strip offset plot to:", out_path, "\n")
-}
-
-if (!is.null(qa13$offsets)) {
-  offset_plot(qa13$offsets,
-              "2013",
-              "D:/MASTERS/THESIS/2026_fresh/CHM/strip_offsets_2013.png")
-}
-if (!is.null(qa18$offsets)) {
-  offset_plot(qa18$offsets,
-              "2018",
-              "D:/MASTERS/THESIS/2026_fresh/CHM/strip_offsets_2018.png")
-}
 
